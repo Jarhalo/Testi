@@ -1,6 +1,7 @@
 """Luo Northern Exposure -jaksokuvake: pieni jaksokyltti logokyltin alle.
 
-Käyttö:  python3 make_episode_icon.py <pohjakuva> <jakso> <tulos.png>
+Käyttö:  python3 make_episode_icon.py <pohjakuva> <jakso> <tulos.png> [kausi]
+         python3 make_episode_icon.py --kaikki <pohjakuva> <kohdekansio>
 
 E- ja P-kirjaimet kopioidaan suoraan logon sanasta "EXPOSURE", jotta
 kirjaintyyli täsmää. Numerot piirretään ja niiden reunat karhennetaan
@@ -56,10 +57,51 @@ def digit_alpha(text, height, stroke_h):
     return np.asarray(out, float) / 255
 
 
-def build(src_path, episode, out_path):
+SEASON_WORDS = ["ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX"]
+SEASON_EPISODES = [8, 7, 23, 25, 24, 23]  # yhteensä 110
+SEASON_FONT = "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
+# Nuolikyltin tekstialue alkuperäisessä kuvassa
+ARROW_TEXT = (74, 408, 282, 439)   # pyyhittävä alue
+ARROW_CAP = (411, 435)             # isojen kirjainten ylä- ja alareuna
+ARROW_X = (78, 284)                # käytettävissä oleva leveys
+ARROW_PAPER, ARROW_INK = 228.0, 28.0
+ARROW_CONDENSE = 0.835             # alkuperäinen teksti on kapeutettu
+
+
+def set_season_text(rgb, season):
+    """Kirjoittaa nuolikylttiin SEASON <numero> alkuperäistä tekstiä jäljitellen."""
+    if season == 1:
+        return  # alkuperäinen teksti kelpaa sellaisenaan
+    x0, y0, x1, y1 = ARROW_TEXT
+    rng = np.random.default_rng(season)
+    rgb[y0:y1, x0:x1] = ARROW_PAPER + rng.normal(0, 2.0, (y1 - y0, x1 - x0, 1))
+
+    text = "SEASON  " + SEASON_WORDS[season - 1]
+    cap = ARROW_CAP[1] - ARROW_CAP[0] + 1
+    scale = 4
+    font = ImageFont.truetype(SEASON_FONT, 100 * scale)
+    cap_ratio = (font.getbbox("H")[3] - font.getbbox("H")[1]) / (100 * scale)
+    font = ImageFont.truetype(SEASON_FONT, round(cap * scale / cap_ratio))
+    l, t, r, b = font.getbbox(text, stroke_width=2)
+    img = Image.new("L", (r - l, b - t), 0)
+    ImageDraw.Draw(img).text((-l, -t), text, font=font, fill=255,
+                              stroke_width=2, stroke_fill=255)
+    avail = ARROW_X[1] - ARROW_X[0]
+    w = img.width / scale * ARROW_CONDENSE
+    w = min(w, avail)  # pitkät sanat (THREE) kapeutetaan hieman lisää
+    img = img.resize((round(w), cap), Image.LANCZOS).filter(ImageFilter.GaussianBlur(0.4))
+    a = np.asarray(img, float)[..., None] / 255
+    tx = ARROW_X[0] + (avail - img.width) // 2
+    ty = ARROW_CAP[0]
+    reg = rgb[ty:ty + cap, tx:tx + img.width]
+    rgb[ty:ty + cap, tx:tx + img.width] = reg * (1 - a) + ARROW_INK * a
+
+
+def build(src_path, episode, out_path, season=1):
     src = Image.open(src_path).convert("RGB")
     rgb = np.asarray(src, float).copy()
     L = np.asarray(src.convert("L"))
+    set_season_text(rgb, season)
 
     # 1) Poista vanha laatikko: täytä peilaamalla ympäröivää taustaa.
     bx0, by0, bx1, by1 = OLD_BOX
@@ -128,8 +170,22 @@ def build(src_path, episode, out_path):
     region = rgb[SY0:SY1, SX0:SX1]
     rgb[SY0:SY1, SX0:SX1] = region * (1 - mask[..., None]) + sign * mask[..., None]
 
-    Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8)).save(out_path)
+    Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8)).save(out_path, quality=93)
+
+
+def build_all(src_path, out_dir):
+    """Kaikki 110 jaksoa: <out_dir>/Kausi N/SxxEyy.jpg"""
+    import os
+    for season, count in enumerate(SEASON_EPISODES, 1):
+        d = os.path.join(out_dir, f"Kausi {season}")
+        os.makedirs(d, exist_ok=True)
+        for ep in range(1, count + 1):
+            build(src_path, ep, os.path.join(d, f"S{season:02d}E{ep:02d}.jpg"), season)
 
 
 if __name__ == "__main__":
-    build(sys.argv[1], int(sys.argv[2]), sys.argv[3])
+    if sys.argv[1] == "--kaikki":
+        build_all(sys.argv[2], sys.argv[3])
+    else:
+        season = int(sys.argv[4]) if len(sys.argv) > 4 else 1
+        build(sys.argv[1], int(sys.argv[2]), sys.argv[3], season)
